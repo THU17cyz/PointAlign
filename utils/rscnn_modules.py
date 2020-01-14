@@ -37,8 +37,9 @@ class _PointnetSAModuleBase(nn.Module):
 
         new_features_list = []
         xyz_flipped = xyz.transpose(1, 2).contiguous()
-        normal_flipped = normal.transpose(1, 2).contiguous()
+
         if self.npoint is not None:
+            normal_flipped = normal.transpose(1, 2).contiguous()
             fps_idx = pointnet2_utils.furthest_point_sample(xyz, self.npoint)  # (B, npoint)
             new_xyz = pointnet2_utils.gather_operation(xyz_flipped, fps_idx).transpose(1, 2).contiguous()
             new_normal = pointnet2_utils.gather_operation(normal_flipped, fps_idx).transpose(1, 2).contiguous()
@@ -90,6 +91,7 @@ class RSCNNSAModuleMSG(_PointnetSAModuleBase):
             first_layer = False,
             last_layer=False,
             scale_num=1,
+            rel_pose_mode="first"
     ):
         super().__init__()
         assert len(radii) == len(nsamples) == len(mlps)
@@ -154,7 +156,7 @@ class RSCNNSAModuleMSG(_PointnetSAModuleBase):
                 mlp_spec[0] += 3
 
             if npoint is not None:
-                self.mlps.append(pt_utils.SharedRSConv(mlp_spec, mapping = mapping, first_layer = first_layer, last_layer=last_layer, scale_num=scale_num))
+                self.mlps.append(pt_utils.SharedRSConv(mlp_spec, mapping = mapping, first_layer = first_layer, last_layer=last_layer, scale_num=scale_num, rel_pose_mode=rel_pose_mode))
             else:   # global convolutional pooling
                 self.mlps.append(pt_utils.RSCNNGloAvgConv(C_in = C_in, C_out = C_out))
 
@@ -207,7 +209,7 @@ class RSCNNFPModule(nn.Module):
 
     def __init__(self, *, mlp: List[int], bn: bool = True):
         super().__init__()
-        self.mlp = pt_utils.SharedPointMlp(mlp, bn=bn)
+        self.mlp = pt_utils.SharedMLP(mlp, bn=bn)
 
     def forward(
             self, unknown: torch.Tensor, known: torch.Tensor,
@@ -245,9 +247,10 @@ class RSCNNFPModule(nn.Module):
         else:
             new_features = interpolated_feats
 
+        new_features = new_features.unsqueeze(-1)
         new_features = self.mlp(new_features)
 
-        return new_features
+        return new_features.squeeze(-1)
 
 
 if __name__ == "__main__":

@@ -40,7 +40,8 @@ class RSConv(nn.Module):
             mapping = None,
             first_layer = False,
             last_layer=False,
-            scale_num=1
+            scale_num=1,
+            rel_pose_mode="first",
     ):
         super(RSConv, self).__init__()                                             
         self.bn_rsconv = nn.BatchNorm2d(C_in) if not first_layer else nn.BatchNorm2d(16)
@@ -54,6 +55,7 @@ class RSConv(nn.Module):
         self.first_layer = first_layer
         self.last_layer = last_layer
         self.scale_num = scale_num
+        self.rel_pose_mode = rel_pose_mode
         self.mapping_func1 = mapping[0]
         self.mapping_func2 = mapping[1]
         self.cr_mapping = mapping[2]
@@ -87,10 +89,20 @@ class RSConv(nn.Module):
         abs_coord = point_align.align(abs_coord.transpose(1, 3).contiguous().unsqueeze(-1))
 
         if not self.first_layer:
-            other_dir = input[:, 9:12, :, :]
-            azi_vec = unitization(azi_vec)
-            dir_dif = azi_vec.unsqueeze(1) - other_dir.transpose(1,3).contiguous()
-            dir_dif = point_align.align(dir_dif.unsqueeze(-1))
+            if self.rel_pose_mode == "first":
+                other_dir = input[:, 9:12, :, :]
+                azi_vec = unitization(azi_vec)
+                dir_dif = azi_vec.unsqueeze(1) - other_dir.transpose(1,3).contiguous()
+                dir_dif = point_align.align(dir_dif.unsqueeze(-1))
+            else:
+                dir_difs = []
+                azi_vec = unitization(azi_vec)
+                for i in range(self.scale_num):
+                    other_dir = input[:, 9+i*(l-3):12+i*(l-3), :, :]
+                    tmp = azi_vec.unsqueeze(1) - other_dir.transpose(1, 3).contiguous()
+                    tmp = point_align.align(tmp.unsqueeze(-1))
+                    dir_difs.append(tmp)
+                dir_dif = torch.mean(torch.stack(dir_difs, dim=0), dim=0)
 
 
         # x is cord info, so has to be rotate invariant too
@@ -109,10 +121,10 @@ class RSConv(nn.Module):
         # no abs value
         if self.first_layer:
             h_xi_xj = torch.cat((h_xi_xj, delta_x, other_normal), dim = 1) # (B, 10, npoint, nsample)
-            #h_xi_xj = torch.cat((h_xi_xj, coord_xi, abs_coord, delta_x, other_normal), dim = 1) # (B, 10, npoint, nsample)
+            # h_xi_xj = torch.cat((h_xi_xj, coord_xi, abs_coord, delta_x, other_normal), dim = 1) # (B, 10, npoint, nsample)
         else:
             h_xi_xj = torch.cat((h_xi_xj, delta_x, other_normal, dir_dif), dim = 1) # (B, 10, npoint, nsample)
-            #h_xi_xj = torch.cat((h_xi_xj, coord_xi, abs_coord, delta_x, other_normal, dir_dot), dim = 1) # (B, 10, npoint, nsample)
+            # h_xi_xj = torch.cat((h_xi_xj, coord_xi, abs_coord, delta_x, other_normal, dir_dot), dim = 1) # (B, 10, npoint, nsample)
                 
 
         del coord_xi, abs_coord, delta_x
@@ -141,6 +153,7 @@ class RSConvLayer(nn.Sequential):
             first_layer = False,
             last_layer=False,
             scale_num=1,
+            rel_pose_mode="first",
     ):
         super(RSConvLayer, self).__init__()
 
@@ -152,6 +165,7 @@ class RSConvLayer(nn.Sequential):
             first_layer = first_layer,
             last_layer=last_layer,
             scale_num=scale_num,
+            rel_pose_mode=rel_pose_mode,
         )
 
         self.add_module('RS_Conv', conv_unit)
@@ -167,6 +181,7 @@ class SharedRSConv(nn.Sequential):
             first_layer = False,
             last_layer=False,
             scale_num=1,
+            rel_pose_mode="first",
     ):
         super().__init__()
 
@@ -181,6 +196,7 @@ class SharedRSConv(nn.Sequential):
                     first_layer = first_layer,
                     last_layer=last_layer,
                     scale_num=scale_num,
+                    rel_pose_mode=rel_pose_mode,
                 )
             )
 

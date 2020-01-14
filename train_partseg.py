@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 import numpy as np
 import os
 from models import PointNet2_SSN_SEG as PointNet2_SSN
+from models import RSCNN_MSN_SEG as RSCNN_MSN
 from data import ShapeNetPart
 import utils.pytorch_utils as pt_utils
 import data.data_utils as d_utils
@@ -20,7 +21,7 @@ torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.deterministic = True
 
-seed = 123#int(time.time())
+seed = 123  # int(time.time())
 random.seed(seed)
 np.random.seed(seed)
 torch.manual_seed(seed)            
@@ -73,10 +74,18 @@ def main():
         num_workers=int(args.workers), 
         pin_memory=True
     )
-    
-    model = PointNet2_SSN(num_classes=args.num_classes)
-    model.cuda()
-    #model = torch.nn.DataParallel(model)
+
+    if args.model == "pointnet2_ssn":
+        model = PointNet2_SSN(num_classes=args.num_classes)
+        model.cuda()
+    elif args.model == "rscnn_msn":
+        model = RSCNN_MSN(num_classes=args.num_classes)
+        model.cuda()
+        model = torch.nn.DataParallel(model)
+    else:
+        print("Doesn't support this model")
+        return 0
+
     optimizer = optim.Adam(
         model.parameters(), lr=args.base_lr, weight_decay=args.weight_decay)
 
@@ -94,12 +103,12 @@ def main():
 
 
     # training
-    # train(train_dataloader, test_dataloader, test_dataloader2, model, criterion, optimizer, lr_scheduler, bnm_scheduler, args, num_batch)
-    validate(test_dataloader2, model, criterion, args, 1, 'so3')
+    train(train_dataloader, test_dataloader, test_dataloader2, model, criterion, optimizer, lr_scheduler, bnm_scheduler, args, num_batch)
+    # validate(test_dataloader2, model, criterion, args, 1, 'so3')
     
 def train(train_dataloader, test_dataloader, test_dataloader2, model, criterion, optimizer, lr_scheduler, bnm_scheduler, args, num_batch):
     global Class_mIoU, Inst_mIoU
-    Class_mIoU, Inst_mIoU = 0.7, 0.7
+    Class_mIoU, Inst_mIoU = 0.75, 0.75
     batch_count = 0
     aug = d_utils.SO3Rotate()
     model.train()
@@ -112,6 +121,9 @@ def train(train_dataloader, test_dataloader, test_dataloader2, model, criterion,
 
             points, norm, target, cls = data
             points, norm, target = points.cuda(), norm.cuda(), target.cuda()
+            if args.model == "rscnn_msn":
+                points.data = d_utils.PointcloudScaleAndTranslate()(points.data)
+
             points.data, norm.data = aug(points.data, norm.data)
             
             optimizer.zero_grad()
