@@ -28,7 +28,7 @@ torch.cuda.manual_seed(seed)
 torch.cuda.manual_seed_all(seed) 
 
 parser = argparse.ArgumentParser(description='Relation-Shape CNN Shape Part Segmentation Training')
-parser.add_argument('--config', default='cfgs/config_msn_partseg.yaml', type=str)
+parser.add_argument('--config', default='cfgs/pointnet2_config_msn_partseg.yaml', type=str)
 
 
 def main():

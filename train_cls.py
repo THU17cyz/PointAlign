@@ -6,6 +6,8 @@ from torch.utils.data import DataLoader
 import numpy as np
 import os
 from models import PointNet2_SSN_CLS as PointNet2_SSN
+from models import RSCNN_SSN_CLS as RSCNN_SSN
+from models import RSCNN_MSN_CLS as RSCNN_MSN
 from data import ModelNet40Cls
 import utils.pytorch_utils as pt_utils
 import utils.pointnet2_utils as pointnet2_utils
@@ -27,10 +29,10 @@ torch.cuda.manual_seed(seed)
 torch.cuda.manual_seed_all(seed) 
 
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '4'
+os.environ['CUDA_VISIBLE_DEVICES'] = '7'
 
 parser = argparse.ArgumentParser(description='Relation-Shape CNN Shape Classification Training')
-parser.add_argument('--config', default='cfgs/config_ssn_cls.yaml', type=str)
+parser.add_argument('--config', default='cfgs/pointnet2_config_ssn_cls.yaml', type=str)
 
 
 def main():
@@ -74,8 +76,21 @@ def main():
         num_workers=int(args.workers), 
         pin_memory=True
     )
-    
-    model = PointNet2_SSN(num_classes = args.num_classes)
+    if args.model == "pointnet2_ssn":
+        model = PointNet2_SSN(num_classes=args.num_classes)
+        model.cuda()
+        # model = torch.nn.DataParallel(model)
+    elif args.model == "rscnn_ssn":
+        model = RSCNN_SSN(num_classes=args.num_classes)
+        model.cuda()
+        model = torch.nn.DataParallel(model)
+    elif args.model == "rscnn_msn":
+        model = RSCNN_MSN(num_classes=args.num_classes)
+        model.cuda()
+        model = torch.nn.DataParallel(model)
+    else:
+        print("Doesn't support this model")
+        return
     model.cuda()
     #model = torch.nn.DataParallel(model)
 
@@ -93,8 +108,8 @@ def main():
     num_batch = len(train_dataset)/args.batch_size
     
     # training
-    train(train_dataloader, test_dataloader_z, test_dataloader_so3, model, criterion, optimizer, lr_scheduler, bnm_scheduler, args, num_batch)
-
+    # train(train_dataloader, test_dataloader_z, test_dataloader_so3, model, criterion, optimizer, lr_scheduler, bnm_scheduler, args, num_batch)
+    validate(test_dataloader_so3, model, criterion, args, 0, 'so3')
 
 def train(train_dataloader,
           test_dataloader_z,
@@ -119,10 +134,17 @@ def train(train_dataloader,
                 bnm_scheduler.step(epoch-1)
             points, normals, target = data
             points, normals, target = points.cuda(), normals.cuda(), target.cuda()
-            fps_idx = pointnet2_utils.furthest_point_sample(points, 1024)  # (B, npoint)
-
-            points = pointnet2_utils.gather_operation(points.transpose(1, 2).contiguous(), fps_idx).transpose(1, 2).contiguous()  # (B, N, 3)
-            normals = pointnet2_utils.gather_operation(normals.transpose(1, 2).contiguous(), fps_idx).transpose(1, 2).contiguous()
+            if args.model == "pointnet2":
+                fps_idx = pointnet2_utils.furthest_point_sample(points, 1024)  # (B, npoint)
+                points = pointnet2_utils.gather_operation(points.transpose(1, 2).contiguous(), fps_idx).transpose(1, 2).contiguous()  # (B, N, 3)
+                normals = pointnet2_utils.gather_operation(normals.transpose(1, 2).contiguous(), fps_idx).transpose(1, 2).contiguous()
+            else:
+                fps_idx = pointnet2_utils.furthest_point_sample(points, 1200)  # (B, npoint)
+                fps_idx = fps_idx[:, np.random.choice(1200, args.num_points, False)]
+                points = pointnet2_utils.gather_operation(points.transpose(1, 2).contiguous(), fps_idx).transpose(1, 2).contiguous()  # (B, N, 3)
+                normals = pointnet2_utils.gather_operation(normals.transpose(1, 2).contiguous(), fps_idx).transpose(1, 2).contiguous()
+                # augmentation
+                points.data = d_utils.PointcloudScaleAndTranslate()(points.data)  # not scale and translate
 
             points.data, normals.data = aug(points.data, normals.data)
 

@@ -1,13 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from torch.autograd import Variable
 from torch.autograd.function import InplaceFunction
 from itertools import repeat
 import numpy as np
-import shutil
-import os
+import shutil, os
 from typing import List, Tuple
 from scipy.stats import t as student_t
 import statistics as stats
@@ -28,102 +26,203 @@ def unitization(vec):
     return vec
 
 
-class ConvLayer(nn.Module):
+########## Relation-Shape Convolution begin ############
+class RSConv(nn.Module):
     '''
     Input shape: (B, C_in, npoint, nsample)
     Output shape: (B, C_out, npoint)
     '''
     def __init__(
-            self,
-            mlp=None,
-            first_layer=False,
-            last_layer=False
+            self, 
+            C_in, 
+            C_out,
+            activation = nn.ReLU(inplace=True),
+            mapping = None,
+            first_layer = False,
+            last_layer=False,
+            scale_num=1
     ):
-        super(ConvLayer, self).__init__()
+        super(RSConv, self).__init__()                                             
+        self.bn_rsconv = nn.BatchNorm2d(C_in) if not first_layer else nn.BatchNorm2d(16)
+        self.bn_channel_raising = nn.BatchNorm1d(C_out)
+        self.bn_xyz_raising = nn.BatchNorm2d(16)
+        if first_layer:
+            self.bn_mapping = nn.BatchNorm2d(math.floor(C_out / 2))
+        else: 
+            self.bn_mapping = nn.BatchNorm2d(math.floor(C_out / 4))
+        self.activation = activation
         self.first_layer = first_layer
-        self.mlp = mlp
         self.last_layer = last_layer
+        self.scale_num = scale_num
+        self.mapping_func1 = mapping[0]
+        self.mapping_func2 = mapping[1]
+        self.cr_mapping = mapping[2]
+        if first_layer:
+            self.xyz_raising = mapping[3]
         
-    def forward(self, in_fts):
-        """
-        in_fts shape: (B, 3 + 3 + 3 + C_in, npoint, centroid + nsample)
-        3 + 3 + 3 + C_in --> absolute coords, normal vectors, relative coords, input features
-        """
-        input, normal = in_fts[0], in_fts[1]
+    def forward(self, input): # input: (B, 3 + 3 + C_in, npoint, centroid + nsample)
+        # normal (B, npoint, 3)
+        input, normal = input[0], input[1]
         if self.first_layer:
-            x = input[:, 6:, :, :]
+            x = input[:, 6:, :, :]           # (B, C_in, npoint, nsample+1), input features
         else:
-            x = torch.cat([input[:, 6:9, :, :], input[:, 12:, :, :]], dim=1)
+            if self.scale_num == 1:
+                x = input[:, 12:, :, :]
+            else:
+                l = (input.shape[1] - 9) // self.scale_num
+                x = input[:, 12:l+9, :, :]
+                for i in range(1, self.scale_num):
+                    x = torch.cat([x, input[:, 12+l*i:9+l*(i+1), :, :]], dim=1)
+
         nsample = x.size()[3]
 
+        # rotate abs_coord and delta_x
         abs_coord = input[:, 0:3, :, :]  # (B, 3, npoint, nsample+1), absolute coordinates
         other_normal = input[:, 3:6, :, :]
         delta_x = input[:, 6:9, :, :]    # (B, 3, npoint, nsample+1), normalized coordinates
-
-        # azimuthal vector is the average of all the projection of relative coords on xy plane
         azi_vec = torch.mean(delta_x[:, :, :, 1:], 3).transpose(1, 2).contiguous()
         point_align = PointAlign(normal, azi_vec, nsample)
-        other_normal = point_align.align(other_normal.transpose(1,3).contiguous().unsqueeze(-1))
+        other_normal = point_align.align(other_normal.transpose(1, 3).contiguous().unsqueeze(-1))
+        delta_x = point_align.align(delta_x.transpose(1, 3).contiguous().unsqueeze(-1))
+        abs_coord = point_align.align(abs_coord.transpose(1, 3).contiguous().unsqueeze(-1))
 
-        # if not first layer, calculate the relative pose
         if not self.first_layer:
-            dir_difs = []
-            for i in range(1):
-                other_dir = input[:, 9:12, :, :]
-                azi_vec = unitization(azi_vec)
-                dir_dif = azi_vec.unsqueeze(1) - other_dir.transpose(1,3).contiguous()
-                dir_dif = point_align.align(dir_dif.unsqueeze(-1))
-                dir_difs.append(dir_dif)
-            dir_difs = torch.mean(torch.stack(dir_difs, dim=0), dim=0)
+            other_dir = input[:, 9:12, :, :]
+            azi_vec = unitization(azi_vec)
+            dir_dif = azi_vec.unsqueeze(1) - other_dir.transpose(1,3).contiguous()
+            dir_dif = point_align.align(dir_dif.unsqueeze(-1))
+
 
         # x is cord info, so has to be rotate invariant too
-        tmp = x[:, 0:3, :, :]
-        tmp = point_align.align(tmp.transpose(1,3).contiguous().unsqueeze(-1))
-        x[:, 0:3, :, :] = tmp
+        if self.first_layer: #now not first layer don't use xyz
+            tmp = x[:, 0:3, :, :]
+            tmp = point_align.align(tmp.transpose(1, 3).contiguous().unsqueeze(-1))
 
-        # concatenate features with relative normal and relative pose information
+            x[:, 0:3, :, :] = tmp
+
+        coord_xi = abs_coord[:, :, :, 0:1].repeat(1, 1, 1, nsample)   # (B, 3, npoint, nsample),  centroid point
+        
+        h_xi_xj = torch.norm(delta_x, p = 2, dim = 1).unsqueeze(1) # (B, 1, npoint, nsample)
+        
+
+
+        # no abs value
         if self.first_layer:
-            x = torch.cat([x, other_normal], dim=1)
+            h_xi_xj = torch.cat((h_xi_xj, delta_x, other_normal), dim = 1) # (B, 10, npoint, nsample)
+            #h_xi_xj = torch.cat((h_xi_xj, coord_xi, abs_coord, delta_x, other_normal), dim = 1) # (B, 10, npoint, nsample)
         else:
-            x = torch.cat([x, other_normal, dir_difs], dim=1)
+            h_xi_xj = torch.cat((h_xi_xj, delta_x, other_normal, dir_dif), dim = 1) # (B, 10, npoint, nsample)
+            #h_xi_xj = torch.cat((h_xi_xj, coord_xi, abs_coord, delta_x, other_normal, dir_dot), dim = 1) # (B, 10, npoint, nsample)
+                
 
-        x = self.mlp(x)
-        x = F.max_pool2d(x, kernel_size = (1, nsample)).squeeze(3)
+        del coord_xi, abs_coord, delta_x
 
-        # if not last layer, concatenate the relative pose features
+        h_xi_xj = self.mapping_func2(self.activation(self.bn_mapping(self.mapping_func1(h_xi_xj))))
+        if self.first_layer:
+            x = self.activation(self.bn_xyz_raising(self.xyz_raising(x)))
+        x = F.max_pool2d(self.activation(self.bn_rsconv(torch.mul(h_xi_xj, x))), kernel_size = (1, nsample)).squeeze(3)   # (B, C_in, npoint)
+        del h_xi_xj
+        x = self.activation(self.bn_channel_raising(self.cr_mapping(x)))
+        
         if not self.last_layer:
             azi_vec = unitization(azi_vec)
             x = torch.cat([azi_vec.transpose(1, 2).contiguous(), x], dim=1)
         return x
+        
+class RSConvLayer(nn.Sequential):
 
+    def __init__(
+            self,
+            in_size: int,
+            out_size: int,
+            activation=nn.ReLU(inplace=True),
+            conv=RSConv,
+            mapping = None,
+            first_layer = False,
+            last_layer=False,
+            scale_num=1,
+    ):
+        super(RSConvLayer, self).__init__()
 
-class PointNetConv(nn.Sequential):
-    def __init__(self, mlp=None, first_layer=False, last_layer=False
+        conv_unit = conv(
+            in_size,
+            out_size,
+            activation = activation,
+            mapping = mapping,
+            first_layer = first_layer,
+            last_layer=last_layer,
+            scale_num=scale_num,
+        )
+
+        self.add_module('RS_Conv', conv_unit)
+                
+class SharedRSConv(nn.Sequential):
+
+    def __init__(
+            self,
+            args: List[int],
+            *,
+            activation=nn.ReLU(inplace=True),
+            mapping = None,
+            first_layer = False,
+            last_layer=False,
+            scale_num=1,
     ):
         super().__init__()
 
-        self.add_module('Conv{}'.format(0), ConvLayer(
-                mlp=mlp,
-                first_layer=first_layer,
-                last_layer=last_layer
-        ))
+        for i in range(len(args) - 1):
+            self.add_module(
+                'RSConvLayer{}'.format(i),
+                RSConvLayer(
+                    args[i],
+                    args[i + 1],
+                    activation = activation,
+                    mapping = mapping,
+                    first_layer = first_layer,
+                    last_layer=last_layer,
+                    scale_num=scale_num,
+                )
+            )
+
+########## Relation-Shape Convolution end ############
 
 
-class GloAvgConv(nn.Module):
-    """
+
+########## global convolutional pooling begin ############
+
+class RSCNNGloAvgConv(nn.Module):
+    '''
     Input shape: (B, C_in, 1, nsample)
     Output shape: (B, C_out, npoint)
-    """
-    def __init__(self, mlp):
-        super(GloAvgConv, self).__init__()
-        self.mlp = mlp
+    '''
+    def __init__(
+            self, 
+            C_in, 
+            C_out, 
+            init=nn.init.kaiming_normal, 
+            bias = True,
+            activation = nn.ReLU(inplace=True)
+    ):
+        super(RSCNNGloAvgConv, self).__init__()
+
+        self.conv_avg = nn.Conv2d(in_channels = C_in, out_channels = C_out, kernel_size = (1, 1), 
+                                  stride = (1, 1), bias = bias) 
+        self.bn_avg = nn.BatchNorm2d(C_out)
+        self.activation = activation
+        self.x = None
+        init(self.conv_avg.weight)
+        if bias:
+            nn.init.constant(self.conv_avg.bias, 0)
         
     def forward(self, x):
         x = x[0]
         nsample = x.size()[3]
-        x = self.mlp(x)
-        x = F.max_pool2d(x, kernel_size=(1, nsample)).squeeze(3)
+        self.x = self.activation(self.bn_avg(self.conv_avg(x)))
+        x = F.max_pool2d(self.x, kernel_size=(1, nsample)).squeeze(3) # max to avg
+        
         return x
+
+########## global convolutional pooling end ############
 
 
 class SharedMLP(nn.Sequential):
@@ -152,7 +251,7 @@ class SharedMLP(nn.Sequential):
                     preact=preact
                 )
             )
-
+            
 
 class _BNBase(nn.Sequential):
 
