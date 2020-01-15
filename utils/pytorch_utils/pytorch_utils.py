@@ -29,16 +29,11 @@ def unitization(vec):
 
 
 class ConvLayer(nn.Module):
-    '''
+    """
     Input shape: (B, C_in, npoint, nsample)
     Output shape: (B, C_out, npoint)
-    '''
-    def __init__(
-            self,
-            mlp=None,
-            first_layer=False,
-            last_layer=False
-    ):
+    """
+    def __init__(self, mlp=None, first_layer=False, last_layer=False):
         super(ConvLayer, self).__init__()
         self.first_layer = first_layer
         self.mlp = mlp
@@ -56,7 +51,6 @@ class ConvLayer(nn.Module):
             x = torch.cat([input[:, 6:9, :, :], input[:, 12:, :, :]], dim=1)
         nsample = x.size()[3]
 
-        abs_coord = input[:, 0:3, :, :]  # (B, 3, npoint, nsample+1), absolute coordinates
         other_normal = input[:, 3:6, :, :]
         delta_x = input[:, 6:9, :, :]    # (B, 3, npoint, nsample+1), normalized coordinates
 

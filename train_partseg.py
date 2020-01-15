@@ -15,7 +15,7 @@ import random
 import yaml
 import time
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '7'
+os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
@@ -29,7 +29,7 @@ torch.cuda.manual_seed(seed)
 torch.cuda.manual_seed_all(seed) 
 
 parser = argparse.ArgumentParser(description='Relation-Shape CNN Shape Part Segmentation Training')
-parser.add_argument('--config', default='cfgs/pointnet2_config_msn_partseg.yaml', type=str)
+parser.add_argument('--config', default='cfgs/rscnn_config_msn_partseg.yaml', type=str)
 
 
 def main():
@@ -56,19 +56,19 @@ def main():
         pin_memory=True
     )
     
-    global test_dataset
-    test_dataset = ShapeNetPart(root=args.data_root, num_points=args.num_points, split='test', normalize=True)
-    test_dataloader = DataLoader(
-        test_dataset, 
+    global test_dataset_z
+    test_dataset_z = ShapeNetPart(root=args.data_root, num_points=args.num_points, split='test', normalize=True)
+    test_dataloader_z = DataLoader(
+        test_dataset_z,
         batch_size=args.batch_size,
         shuffle=False, 
         num_workers=int(args.workers), 
         pin_memory=True
     )
-    global test_dataset2
-    test_dataset2 = ShapeNetPart(root=args.data_root, num_points=args.num_points, split='test', normalize=True)
-    test_dataloader2 = DataLoader(
-        test_dataset2, 
+    global test_dataset_so3
+    test_dataset_so3 = ShapeNetPart(root=args.data_root, num_points=args.num_points, split='test', normalize=True)
+    test_dataloader_so3 = DataLoader(
+        test_dataset_so3,
         batch_size=args.batch_size,
         shuffle=False, 
         num_workers=int(args.workers), 
@@ -86,9 +86,7 @@ def main():
         print("Doesn't support this model")
         return 0
 
-    optimizer = optim.Adam(
-        model.parameters(), lr=args.base_lr, weight_decay=args.weight_decay)
-
+    optimizer = optim.Adam(model.parameters(), lr=args.base_lr, weight_decay=args.weight_decay)
     lr_lbmd = lambda e: max(args.lr_decay**(e // args.decay_step), args.lr_clip / args.base_lr)
     bnm_lmbd = lambda e: max(args.bn_momentum * args.bn_decay**(e // args.decay_step), args.bnm_clip)
     lr_scheduler = lr_sched.LambdaLR(optimizer, lr_lbmd)
@@ -101,12 +99,13 @@ def main():
     criterion = nn.CrossEntropyLoss()
     num_batch = len(train_dataset)/args.batch_size
 
-
     # training
-    train(train_dataloader, test_dataloader, test_dataloader2, model, criterion, optimizer, lr_scheduler, bnm_scheduler, args, num_batch)
-    # validate(test_dataloader2, model, criterion, args, 1, 'so3')
-    
-def train(train_dataloader, test_dataloader, test_dataloader2, model, criterion, optimizer, lr_scheduler, bnm_scheduler, args, num_batch):
+    # train(train_dataloader, test_dataloader_z, test_dataloader_so3, model, criterion, optimizer, lr_scheduler, bnm_scheduler, args, num_batch)
+    validate(test_dataloader_so3, model, criterion, args, 1, 'so3')
+
+
+def train(train_dataloader, test_dataloader_z, test_dataloader_so3, model,
+          criterion, optimizer, lr_scheduler, bnm_scheduler, args, num_batch):
     global Class_mIoU, Inst_mIoU
     Class_mIoU, Inst_mIoU = 0.75, 0.75
     batch_count = 0
@@ -121,6 +120,8 @@ def train(train_dataloader, test_dataloader, test_dataloader2, model, criterion,
 
             points, norm, target, cls = data
             points, norm, target = points.cuda(), norm.cuda(), target.cuda()
+
+            # RS-CNN performs a translation to the input first
             if args.model == "rscnn_msn":
                 points.data = d_utils.PointcloudScaleAndTranslate()(points.data)
 
@@ -145,12 +146,12 @@ def train(train_dataloader, test_dataloader, test_dataloader2, model, criterion,
             batch_count += 1
 
             if args.evaluate and batch_count % int(args.val_freq_epoch * num_batch) == 0:
-                # validate(test_dataloader, model, criterion, args, batch_count, 'z')
-                validate(test_dataloader2, model, criterion, args, batch_count, 'so3')
+                # validate(test_dataloader_z, model, criterion, args, batch_count, 'z')
+                validate(test_dataloader_so3, model, criterion, args, batch_count, 'so3')
 
 
 def validate(test_dataloader, model, criterion, args, iter, mode): 
-    global Class_mIoU, Inst_mIoU, test_dataset
+    global Class_mIoU, Inst_mIoU, test_dataset_z
     if mode == 'z':
         aug = d_utils.ZRotate()
     else:
@@ -158,7 +159,7 @@ def validate(test_dataloader, model, criterion, args, iter, mode):
 
     model.eval()
     
-    seg_classes = test_dataset.seg_classes
+    seg_classes = test_dataset_z.seg_classes
     shape_ious = {cat:[] for cat in seg_classes.keys()}
     seg_label_to_cat = {}           # {0:Airplane, 1:Airplane, ...49:Table}
     for cat in seg_classes.keys():
@@ -176,10 +177,9 @@ def validate(test_dataloader, model, criterion, args, iter, mode):
             batch_one_hot_cls[b, int(cls[b])] = 1
         batch_one_hot_cls = torch.from_numpy(batch_one_hot_cls)
         batch_one_hot_cls = batch_one_hot_cls.float().cuda()
-        #batch_one_hot_cls = Variable(batch_one_hot_cls.float().cuda())
+
         with torch.no_grad():
             pred = model(points, norm, batch_one_hot_cls)
-            #print(pred.shape)
             loss = criterion(pred.view(-1, args.num_classes), target.view(-1,1)[:,0])
             losses.append(loss.data.clone())
             pred = pred.data.cpu()
@@ -190,31 +190,18 @@ def validate(test_dataloader, model, criterion, args, iter, mode):
         for b in range(len(cls)):
             cat = seg_label_to_cat[target[b, 0].item()]
             logits = pred[b, :, :]   # (num_points, num_classes)
-            #print(logits[:, seg_classes[cat]].max(1)[1])
             pred_val[b, :] = logits[:, seg_classes[cat]].max(1)[1] + seg_classes[cat][0]
             
         for b in range(len(cls)):
             segp = pred_val[b, :]
             segl = target[b, :]
-            
-
-            ##############################################################
-            # output = torch.cat([points[b].cpu(), segp.unsqueeze(-1).float()], dim=1).cpu().detach().numpy()
-            # print(output.shape)
-            # np.savetxt("segres/"+ str(b+j*len(cls))+".txt", output)
-            ###########################################################
-
             cat = seg_label_to_cat[segl[0].item()]
             part_ious = [0.0 for _ in range(len(seg_classes[cat]))]
             for l in seg_classes[cat]:
-                #print(segl)
-                #print(seg_classes[cat])
                 if torch.sum((segl == l) | (segp == l)).item() == 0:
                     # part is not present in this shape
                     part_ious[l - seg_classes[cat][0]] = 1.0
-                    #print(torch.sum((segl == l) | (segp == l)))
                 else:
-                    #print(torch.sum((segl == l) | (segp == l)))
                     part_ious[l - seg_classes[cat][0]] = torch.sum((segl == l) & (segp == l)).item() / float(torch.sum((segl == l) | (segp == l)).item())
 
             shape_ious[cat].append(np.mean(part_ious))
@@ -241,7 +228,7 @@ def validate(test_dataloader, model, criterion, args, iter, mode):
                 Inst_mIoU = np.mean(instance_ious)
             torch.save(model.state_dict(), '%s/ss_third_iter_%d_ins_%0.6f_cls_%0.6f.pth' % (args.save_path, iter, np.mean(instance_ious), mean_class_ious))
     model.train()
-    
+
+
 if __name__ == "__main__":
     main()
-    print("so3so3_third")

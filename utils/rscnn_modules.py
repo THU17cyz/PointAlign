@@ -9,6 +9,7 @@ import numpy as np
 import time
 import math
 
+
 class _PointnetSAModuleBase(nn.Module):
 
     def __init__(self):
@@ -19,22 +20,19 @@ class _PointnetSAModuleBase(nn.Module):
 
     def forward(self, xyz: torch.Tensor, normal: torch.Tensor,
                 features: torch.Tensor = None) -> (torch.Tensor, torch.Tensor):
-        r"""
+        """
         Parameters
         ----------
-        xyz : torch.Tensor
-            (B, N, 3) tensor of the xyz coordinates of the points
-        features : torch.Tensor
-            (B, N, C) tensor of the descriptors of the the points
+        xyz : (B, N, 3) tensor of the xyz coordinates of the points
+        xyz : (B, N, 3) tensor of the normal vectors of the points
+        features : (B, N, C) tensor of the descriptors of the the points
 
         Returns
         -------
-        new_xyz : torch.Tensor
-            (B, npoint, 3) tensor of the new points' xyz
-        new_features : torch.Tensor
-            (B, npoint, \sum_k(mlps[k][-1])) tensor of the new_points descriptors
+        new_xyz : (B, npoint, 3) tensor of the new points' xyz
+        new_normal : (B, npoint, 3) tensor of the new points' normal
+        new_features : (B, npoint, \sum_k(mlps[k][-1])) tensor of the new_points descriptors
         """
-
         new_features_list = []
         xyz_flipped = xyz.transpose(1, 2).contiguous()
 
@@ -62,22 +60,20 @@ class _PointnetSAModuleBase(nn.Module):
 
 
 class RSCNNSAModuleMSG(_PointnetSAModuleBase):
-    r"""Pointnet set abstrction layer with multiscale grouping
-
+    """
+    RSCNN layer with multiscale grouping
     Parameters
     ----------
-    npoint : int
-        Number of points
-    radii : list of float32
-        list of radii to group with
-    nsamples : list of int32
-        Number of samples in each ball query
-    mlps : list of list of int32
-        Spec of the pointnet before the global max_pool for each scale
-    bn : bool
-        Use batchnorm
+    npoint : number of points
+    radii : list of radii to group with
+    nsamples : number of samples in each ball query
+    mlps : mlps for each scale
+    use_xyz : use xyz or not
+    first_layer: if it is the first layer
+    last_layer: if it is the last layer
+    scale_num: how many scales are used
+    rel_pose_mode: how to calculate the relative pose, "first" means use the first, "avg" means averaging all
     """
-
     def __init__(
             self,
             *,
@@ -86,9 +82,9 @@ class RSCNNSAModuleMSG(_PointnetSAModuleBase):
             nsamples: List[int],
             mlps: List[List[int]],
             use_xyz: bool = True,
-            bias = True,
-            init = nn.init.kaiming_normal,
-            first_layer = False,
+            bias=True,
+            init=nn.init.kaiming_normal,
+            first_layer=False,
             last_layer=False,
             scale_num=1,
             rel_pose_mode="first"
@@ -102,30 +98,28 @@ class RSCNNSAModuleMSG(_PointnetSAModuleBase):
         # initialize shared mapping functions
         C_in = (mlps[0][0] + 3) if use_xyz else mlps[0][0]
         C_out = mlps[0][1]
-        
 
         if first_layer:
             in_channels = 7
         else:
-            #in_channels = 14
             in_channels = 10
 
-        
         if first_layer:
-            mapping_func1 = nn.Conv2d(in_channels = in_channels, out_channels = math.floor(C_out / 2), kernel_size = (1, 1), 
-                                      stride = (1, 1), bias = bias)
-            mapping_func2 = nn.Conv2d(in_channels = math.floor(C_out / 2), out_channels = 16, kernel_size = (1, 1), 
-                                  stride = (1, 1), bias = bias)
-            xyz_raising = nn.Conv2d(in_channels = C_in, out_channels = 16, kernel_size = (1, 1), 
-                                  stride = (1, 1), bias = bias)
+            mapping_func1 = nn.Conv2d(in_channels=in_channels, out_channels=math.floor(C_out / 2), kernel_size=(1, 1),
+                                      stride=(1, 1), bias=bias)
+            mapping_func2 = nn.Conv2d(in_channels=math.floor(C_out / 2), out_channels=16, kernel_size=(1, 1),
+                                  stride=(1, 1), bias=bias)
+            xyz_raising = nn.Conv2d(in_channels=C_in, out_channels=16, kernel_size=(1, 1),
+                                  stride=(1, 1), bias=bias)
             init(xyz_raising.weight)
             if bias:
                 nn.init.constant(xyz_raising.bias, 0)
         elif npoint is not None:
-            mapping_func1 = nn.Conv2d(in_channels = in_channels, out_channels = math.floor(C_out / 4), kernel_size = (1, 1), 
-                                      stride = (1, 1), bias = bias)
-            mapping_func2 = nn.Conv2d(in_channels = math.floor(C_out / 4), out_channels = C_in, kernel_size = (1, 1), 
-                                  stride = (1, 1), bias = bias)
+            mapping_func1 = nn.Conv2d(in_channels=in_channels, out_channels=math.floor(C_out / 4), kernel_size=(1, 1),
+                                      stride=(1, 1), bias=bias)
+            mapping_func2 = nn.Conv2d(in_channels=math.floor(C_out / 4), out_channels=C_in, kernel_size=(1, 1),
+                                  stride=(1, 1), bias=bias)
+
         if npoint is not None:
             init(mapping_func1.weight)
             init(mapping_func2.weight)
@@ -134,8 +128,8 @@ class RSCNNSAModuleMSG(_PointnetSAModuleBase):
                 nn.init.constant(mapping_func2.bias, 0)    
                      
             # channel raising mapping
-            cr_mapping = nn.Conv1d(in_channels = C_in if not first_layer else 16, out_channels = C_out, kernel_size = 1, 
-                                      stride = 1, bias = bias)
+            cr_mapping = nn.Conv1d(in_channels=C_in if not first_layer else 16, out_channels=C_out, kernel_size=1,
+                                      stride=1, bias=bias)
             init(cr_mapping.weight)
             nn.init.constant(cr_mapping.bias, 0)
         
@@ -157,27 +151,20 @@ class RSCNNSAModuleMSG(_PointnetSAModuleBase):
 
             if npoint is not None:
                 self.mlps.append(pt_utils.SharedRSConv(mlp_spec, mapping = mapping, first_layer = first_layer, last_layer=last_layer, scale_num=scale_num, rel_pose_mode=rel_pose_mode))
-            else:   # global convolutional pooling
+            else:
+                # global pooling
                 self.mlps.append(pt_utils.RSCNNGloAvgConv(C_in = C_in, C_out = C_out))
 
 
 class RSCNNSAModule(RSCNNSAModuleMSG):
-    r"""Pointnet set abstrction layer
-
+    """
     Parameters
     ----------
-    npoint : int
-        Number of features
-    radius : float
-        Radius of ball
-    nsample : int
-        Number of samples in the ball query
-    mlp : list
-        Spec of the pointnet before the global max_pool
-    bn : bool
-        Use batchnorm
+    mlp : mlps for each scale
+    npoint : number of features
+    radius : radius of ball
+    nsample : number of samples in the ball query
     """
-
     def __init__(
             self,
             *,
@@ -197,8 +184,8 @@ class RSCNNSAModule(RSCNNSAModuleMSG):
 
 
 class RSCNNFPModule(nn.Module):
-    r"""Propigates the features of one set to another
-
+    """
+    Propagates the features of one set to another
     Parameters
     ----------
     mlp : list
@@ -206,7 +193,6 @@ class RSCNNFPModule(nn.Module):
     bn : bool
         Use batchnorm
     """
-
     def __init__(self, *, mlp: List[int], bn: bool = True):
         super().__init__()
         self.mlp = pt_utils.SharedMLP(mlp, bn=bn)
@@ -215,7 +201,7 @@ class RSCNNFPModule(nn.Module):
             self, unknown: torch.Tensor, known: torch.Tensor,
             unknow_feats: torch.Tensor, known_feats: torch.Tensor
     ) -> torch.Tensor:
-        r"""
+        """
         Parameters
         ----------
         unknown : torch.Tensor
@@ -238,12 +224,9 @@ class RSCNNFPModule(nn.Module):
         norm = torch.sum(dist_recip, dim=2, keepdim=True)
         weight = dist_recip / norm
 
-        interpolated_feats = pointnet2_utils.three_interpolate(
-            known_feats, idx, weight
-        )
+        interpolated_feats = pointnet2_utils.three_interpolate(known_feats, idx, weight)
         if unknow_feats is not None:
-            new_features = torch.cat([interpolated_feats, unknow_feats],
-                                     dim=1)  #(B, C2 + C1, n)
+            new_features = torch.cat([interpolated_feats, unknow_feats], dim=1)
         else:
             new_features = interpolated_feats
 

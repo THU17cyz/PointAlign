@@ -27,8 +27,8 @@ common:
     #       1  for (3D Ed, x_i, x_j, x_j - x_i),     channels = 10
     #       2  for (2D Ed, x'_i, x'_j, x'_j - x'_i), channels = 10,  x' indicates 2D coordinates
     relation_prior: 1
-    checkpoint: ""
-    #checkpoint: "/home/congyezhen/PointAlign/zso3_seg_msn_noabs_meandif_iter_79223_ins_0.817290_cls_0.785999.pth"
+    #checkpoint: ""
+    checkpoint: "/home/congyezhen/PointAlign/zso3_seg_msn_noabs_meandif_iter_79223_ins_0.817290_cls_0.785999.pth"
     #checkpoint: "/home/congyezhen/rscnn_seg/seg/so3so3_seg_msn_noabs_meandif_iter_90391_ins_0.819974_cls_0.788111.pth"        # the model to start from
     save_path: seg
     data_root: '/repository/shapenetcore_partanno_segmentation_benchmark_v0_normal/'

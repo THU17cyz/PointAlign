@@ -15,7 +15,6 @@ import data.data_utils as d_utils
 import argparse
 import random
 import yaml
-import time
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
@@ -52,7 +51,7 @@ def main():
     
     train_dataset = ModelNet40Cls(num_points=args.num_points, root=args.data_root, transforms=None)
     train_dataloader = DataLoader(
-        train_dataset, 
+        train_dataset,
         batch_size=args.batch_size,
         shuffle=True, 
         num_workers=int(args.workers), 
@@ -79,7 +78,6 @@ def main():
     if args.model == "pointnet2_ssn":
         model = PointNet2_SSN(num_classes=args.num_classes)
         model.cuda()
-        # model = torch.nn.DataParallel(model)
     elif args.model == "rscnn_ssn":
         model = RSCNN_SSN(num_classes=args.num_classes)
         model.cuda()
@@ -91,8 +89,6 @@ def main():
     else:
         print("Doesn't support this model")
         return
-    model.cuda()
-    #model = torch.nn.DataParallel(model)
 
     optimizer = optim.Adam(model.parameters(), lr=args.base_lr, weight_decay=args.weight_decay)
     lr_lbmd = lambda e: max(args.lr_decay**(e // args.decay_step), args.lr_clip / args.base_lr)
@@ -108,22 +104,15 @@ def main():
     num_batch = len(train_dataset)/args.batch_size
     
     # training
-    # train(train_dataloader, test_dataloader_z, test_dataloader_so3, model, criterion, optimizer, lr_scheduler, bnm_scheduler, args, num_batch)
-    validate(test_dataloader_so3, model, criterion, args, 0, 'so3')
+    train(train_dataloader, test_dataloader_z, test_dataloader_so3, model, criterion, optimizer, lr_scheduler, bnm_scheduler, args, num_batch)
+    # validate(test_dataloader_so3, model, criterion, args, 0, 'so3')
 
-def train(train_dataloader,
-          test_dataloader_z,
-          test_dataloader_so3,
-          model,
-          criterion,
-          optimizer,
-          lr_scheduler,
-          bnm_scheduler,
-          args,
-          num_batch):
+
+def train(train_dataloader, test_dataloader_z, test_dataloader_so3, model, criterion,
+          optimizer, lr_scheduler, bnm_scheduler, args, num_batch):
     aug = d_utils.ZRotate()
     global g_acc 
-    g_acc = 0.88    # only save the model whose acc > 0.91
+    g_acc = 0.88  # only save the model whose acc > g_acc
     batch_count = 0
     model.train()
     for epoch in range(args.epochs):
@@ -143,8 +132,8 @@ def train(train_dataloader,
                 fps_idx = fps_idx[:, np.random.choice(1200, args.num_points, False)]
                 points = pointnet2_utils.gather_operation(points.transpose(1, 2).contiguous(), fps_idx).transpose(1, 2).contiguous()  # (B, N, 3)
                 normals = pointnet2_utils.gather_operation(normals.transpose(1, 2).contiguous(), fps_idx).transpose(1, 2).contiguous()
-                # augmentation
-                points.data = d_utils.PointcloudScaleAndTranslate()(points.data)  # not scale and translate
+                # # RS-CNN performs a translation to the input first
+                points.data = d_utils.PointcloudScaleAndTranslate()(points.data)
 
             points.data, normals.data = aug(points.data, normals.data)
 
@@ -177,10 +166,11 @@ def validate(test_dataloader, model, criterion, args, iter, mode):
         points, normals, target = points.cuda(), normals.cuda(), target.cuda()
         
         # fastest point sampling
-        fps_idx = pointnet2_utils.furthest_point_sample(points, args.num_points)  # (B, npoint)
-        # fps_idx = fps_idx[:, np.random.choice(1200, args.num_points, False)]
-        points = pointnet2_utils.gather_operation(points.transpose(1, 2).contiguous(), fps_idx).transpose(1, 2).contiguous()
-        normals = pointnet2_utils.gather_operation(normals.transpose(1, 2).contiguous(), fps_idx).transpose(1, 2).contiguous()
+        fps_idx = pointnet2_utils.furthest_point_sample(points, args.num_points)
+        points = pointnet2_utils.gather_operation(points.transpose(1, 2).contiguous(), fps_idx)\
+            .transpose(1, 2).contiguous()
+        normals = pointnet2_utils.gather_operation(normals.transpose(1, 2).contiguous(), fps_idx)\
+            .transpose(1, 2).contiguous()
 
         points.data, normals.data = aug(points.data, normals.data)
 
@@ -190,7 +180,6 @@ def validate(test_dataloader, model, criterion, args, iter, mode):
             loss = criterion(pred, target)
             losses.append(loss.data.clone())
             _, pred_choice = torch.max(pred.data, -1)
-        
             preds.append(pred_choice)
             labels.append(target.data)
         
@@ -206,11 +195,7 @@ def validate(test_dataloader, model, criterion, args, iter, mode):
         g_acc = acc
         torch.save(model.state_dict(), '%s/zso3ours_iter_%d_acc_%0.6f.pth' % (args.save_path, iter, acc))
     model.train()
-    #assert 1 > 2
 
 
 if __name__ == "__main__":
-    print("mynorm48, scaleaug and random fps, ssn, 16, put norm/dir in h, and don't use xyz in second layer, max pooling!")
-    print("zso3_ours")
     main()
-    print("mynorm48, scaleaug and random fps, ssn, 16, put norm/dir in h, and don't use xyz in second layer, max pooling!")

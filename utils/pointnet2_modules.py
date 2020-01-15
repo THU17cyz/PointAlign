@@ -79,7 +79,8 @@ class _PointnetSAModuleBase(nn.Module):
 
 
 class PointnetSAModuleMSG(_PointnetSAModuleBase):
-    """Pointnet set abstraction layer with multiscale grouping
+    """
+    Pointnet set abstraction layer with multiscale grouping
     Parameters
     ----------
     npoint : number of points
@@ -117,7 +118,7 @@ class PointnetSAModuleMSG(_PointnetSAModuleBase):
                 self.groupers.append(pointnet2_utils.QueryAndGroup(radius, nsample, use_xyz=use_xyz))
                 self.mlps.append(pt_utils.PointNetConv(mlp=mlp, first_layer=first_layer, last_layer=last_layer))
             else:
-                # global convolutional pooling
+                # global pooling
                 self.groupers.append(pointnet2_utils.GroupAll(False))
                 self.mlps.append(pt_utils.GloAvgConv(mlp=MLP(mlps[i])))
 
@@ -150,7 +151,8 @@ class PointnetSAModule(PointnetSAModuleMSG):
 
 
 class PointnetFPModule(nn.Module):
-    """Propagates the features of one set to another
+    """
+    Propagates the features of one set to another
     Parameters
     ----------
     mlp : list

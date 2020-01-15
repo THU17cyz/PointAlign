@@ -1,17 +1,19 @@
-import os, sys
+import os
+import sys
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(BASE_DIR)
 sys.path.append(os.path.join(BASE_DIR, "../utils"))
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 import pytorch_utils as pt_utils
 from pointnet2_modules import PointnetSAModule, PointnetSAModuleMSG
-import numpy as np
 
 
-# PointNet++: Single-Scale Neighborhood
 class PointNet2_SSN(nn.Module):
+    """
+    PointNet++: Single-Scale Neighborhood
+    Classification Task
+    """
     def __init__(self, num_classes):
         super().__init__()
 
@@ -40,7 +42,7 @@ class PointNet2_SSN(nn.Module):
         )
         
         self.SA_modules.append(
-            # global convolutional pooling
+            # global pooling
             PointnetSAModule(
                 nsample=128,
                 mlp=[256, 256, 512, 1024], 

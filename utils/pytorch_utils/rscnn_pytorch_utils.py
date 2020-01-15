@@ -26,19 +26,18 @@ def unitization(vec):
     return vec
 
 
-########## Relation-Shape Convolution begin ############
 class RSConv(nn.Module):
-    '''
+    """
     Input shape: (B, C_in, npoint, nsample)
     Output shape: (B, C_out, npoint)
-    '''
+    """
     def __init__(
             self, 
             C_in, 
             C_out,
-            activation = nn.ReLU(inplace=True),
-            mapping = None,
-            first_layer = False,
+            activation=nn.ReLU(inplace=True),
+            mapping=None,
+            first_layer=False,
             last_layer=False,
             scale_num=1,
             rel_pose_mode="first",
@@ -62,8 +61,11 @@ class RSConv(nn.Module):
         if first_layer:
             self.xyz_raising = mapping[3]
         
-    def forward(self, input): # input: (B, 3 + 3 + C_in, npoint, centroid + nsample)
+    def forward(self, input):
+        """
+        # input: (B, 3 + 3 + C_in, npoint, centroid + nsample)
         # normal (B, npoint, 3)
+        """
         input, normal = input[0], input[1]
         if self.first_layer:
             x = input[:, 6:, :, :]           # (B, C_in, npoint, nsample+1), input features
@@ -71,6 +73,7 @@ class RSConv(nn.Module):
             if self.scale_num == 1:
                 x = input[:, 12:, :, :]
             else:
+                # extract the features without encoded pose vector
                 l = (input.shape[1] - 9) // self.scale_num
                 x = input[:, 12:l+9, :, :]
                 for i in range(1, self.scale_num):
@@ -78,7 +81,7 @@ class RSConv(nn.Module):
 
         nsample = x.size()[3]
 
-        # rotate abs_coord and delta_x
+
         abs_coord = input[:, 0:3, :, :]  # (B, 3, npoint, nsample+1), absolute coordinates
         other_normal = input[:, 3:6, :, :]
         delta_x = input[:, 6:9, :, :]    # (B, 3, npoint, nsample+1), normalized coordinates
@@ -88,6 +91,7 @@ class RSConv(nn.Module):
         delta_x = point_align.align(delta_x.transpose(1, 3).contiguous().unsqueeze(-1))
         abs_coord = point_align.align(abs_coord.transpose(1, 3).contiguous().unsqueeze(-1))
 
+        # calculate the relative pose feature
         if not self.first_layer:
             if self.rel_pose_mode == "first":
                 other_dir = input[:, 9:12, :, :]
@@ -104,28 +108,20 @@ class RSConv(nn.Module):
                     dir_difs.append(tmp)
                 dir_dif = torch.mean(torch.stack(dir_difs, dim=0), dim=0)
 
-
         # x is cord info, so has to be rotate invariant too
-        if self.first_layer: #now not first layer don't use xyz
+        if self.first_layer:
             tmp = x[:, 0:3, :, :]
             tmp = point_align.align(tmp.transpose(1, 3).contiguous().unsqueeze(-1))
-
             x[:, 0:3, :, :] = tmp
 
         coord_xi = abs_coord[:, :, :, 0:1].repeat(1, 1, 1, nsample)   # (B, 3, npoint, nsample),  centroid point
         
         h_xi_xj = torch.norm(delta_x, p = 2, dim = 1).unsqueeze(1) # (B, 1, npoint, nsample)
-        
 
-
-        # no abs value
         if self.first_layer:
-            h_xi_xj = torch.cat((h_xi_xj, delta_x, other_normal), dim = 1) # (B, 10, npoint, nsample)
-            # h_xi_xj = torch.cat((h_xi_xj, coord_xi, abs_coord, delta_x, other_normal), dim = 1) # (B, 10, npoint, nsample)
+            h_xi_xj = torch.cat((h_xi_xj, delta_x, other_normal), dim=1)  # (B, 10, npoint, nsample)
         else:
-            h_xi_xj = torch.cat((h_xi_xj, delta_x, other_normal, dir_dif), dim = 1) # (B, 10, npoint, nsample)
-            # h_xi_xj = torch.cat((h_xi_xj, coord_xi, abs_coord, delta_x, other_normal, dir_dot), dim = 1) # (B, 10, npoint, nsample)
-                
+            h_xi_xj = torch.cat((h_xi_xj, delta_x, other_normal, dir_dif), dim=1)  # (B, 10, npoint, nsample)
 
         del coord_xi, abs_coord, delta_x
 
@@ -140,9 +136,9 @@ class RSConv(nn.Module):
             azi_vec = unitization(azi_vec)
             x = torch.cat([azi_vec.transpose(1, 2).contiguous(), x], dim=1)
         return x
-        
-class RSConvLayer(nn.Sequential):
 
+
+class RSConvLayer(nn.Sequential):
     def __init__(
             self,
             in_size: int,
@@ -156,7 +152,6 @@ class RSConvLayer(nn.Sequential):
             rel_pose_mode="first",
     ):
         super(RSConvLayer, self).__init__()
-
         conv_unit = conv(
             in_size,
             out_size,
@@ -167,9 +162,9 @@ class RSConvLayer(nn.Sequential):
             scale_num=scale_num,
             rel_pose_mode=rel_pose_mode,
         )
-
         self.add_module('RS_Conv', conv_unit)
-                
+
+
 class SharedRSConv(nn.Sequential):
 
     def __init__(
@@ -200,32 +195,26 @@ class SharedRSConv(nn.Sequential):
                 )
             )
 
-########## Relation-Shape Convolution end ############
-
-
-
-########## global convolutional pooling begin ############
 
 class RSCNNGloAvgConv(nn.Module):
-    '''
+    """
     Input shape: (B, C_in, 1, nsample)
     Output shape: (B, C_out, npoint)
-    '''
+    """
     def __init__(
             self, 
             C_in, 
             C_out, 
             init=nn.init.kaiming_normal, 
-            bias = True,
-            activation = nn.ReLU(inplace=True)
+            bias=True,
+            activation=nn.ReLU(inplace=True)
     ):
         super(RSCNNGloAvgConv, self).__init__()
 
-        self.conv_avg = nn.Conv2d(in_channels = C_in, out_channels = C_out, kernel_size = (1, 1), 
-                                  stride = (1, 1), bias = bias) 
+        self.conv_avg = nn.Conv2d(in_channels=C_in, out_channels=C_out, kernel_size=(1, 1),
+                                  stride=(1, 1), bias=bias)
         self.bn_avg = nn.BatchNorm2d(C_out)
         self.activation = activation
-        self.x = None
         init(self.conv_avg.weight)
         if bias:
             nn.init.constant(self.conv_avg.bias, 0)
@@ -233,16 +222,12 @@ class RSCNNGloAvgConv(nn.Module):
     def forward(self, x):
         x = x[0]
         nsample = x.size()[3]
-        self.x = self.activation(self.bn_avg(self.conv_avg(x)))
-        x = F.max_pool2d(self.x, kernel_size=(1, nsample)).squeeze(3) # max to avg
-        
+        x = self.activation(self.bn_avg(self.conv_avg(x)))
+        x = F.max_pool2d(x, kernel_size=(1, nsample)).squeeze(3) # max to avg
         return x
-
-########## global convolutional pooling end ############
 
 
 class SharedMLP(nn.Sequential):
-
     def __init__(
             self,
             args: List[int],

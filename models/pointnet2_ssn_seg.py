@@ -4,19 +4,20 @@ sys.path.append(BASE_DIR)
 sys.path.append(os.path.join(BASE_DIR, "../utils"))
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 import pytorch_utils as pt_utils
 from pointnet2_modules import PointnetSAModule, PointnetFPModule, PointnetSAModuleMSG
-import numpy as np
+
 
 class PointNet2_SSN(nn.Module):
     """
+    PointNet++: Single-Scale Neighborhood
+    Part Segmentation Task
     """
     def __init__(self, num_classes):
         super().__init__()
 
         self.SA_modules = nn.ModuleList()
-        self.SA_modules.append(     # 0
+        self.SA_modules.append(
             PointnetSAModuleMSG(
                 npoint=512,
                 radii=[0.2],
@@ -26,7 +27,7 @@ class PointNet2_SSN(nn.Module):
                 use_xyz=True,
             )
         )
-        self.SA_modules.append(    # 1
+        self.SA_modules.append(
             PointnetSAModuleMSG(
                 npoint=128,
                 radii=[0.4],
@@ -36,7 +37,9 @@ class PointNet2_SSN(nn.Module):
                 last_layer=True,
             )
         )
-        self.SA_modules.append(   # 4   global pooling
+
+        # global pooling
+        self.SA_modules.append(
             PointnetSAModule(
                 nsample=128,
                 mlp=[256, 256, 512, 1024],
@@ -44,13 +47,9 @@ class PointNet2_SSN(nn.Module):
             )
         )
         self.FP_modules = nn.ModuleList()
-        self.FP_modules.append(
-            PointnetFPModule(mlp=[128, 128, 128, 128])
-        )
+        self.FP_modules.append(PointnetFPModule(mlp=[128, 128, 128, 128]))
         self.FP_modules.append(PointnetFPModule(mlp=[384, 256, 128]))
-        self.FP_modules.append(
-            PointnetFPModule(mlp=[1280, 256, 256])
-        )
+        self.FP_modules.append(PointnetFPModule(mlp=[1280, 256, 256]))
 
         self.FC_layer = nn.Sequential(
             pt_utils.Conv1d(128, 128, bn=True), nn.Dropout(),
@@ -85,3 +84,7 @@ class PointNet2_SSN(nn.Module):
             l_features[i - 1] = self.FP_modules[i](l_xyz[i - 1], l_xyz[i], l_features[i - 1], l_features[i])
 
         return self.FC_layer(l_features[0]).transpose(1, 2).contiguous()
+
+
+if __name__ == "__main__":
+    pass
