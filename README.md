@@ -2,19 +2,33 @@
 
 #### Object Classification
 
+##### PointNet++ Single Scale Neighbourhood
 ```sh
-sh train_cls.sh
+sh train_pointnet2_ssn_cls.sh
 ```
 
+##### RS-CNN Single Scale Neighbourhood
+```sh
+sh train_rscnn_ssn_cls.sh
+```
+
+##### RS-CNN Multi Scale Neighbourhood
+```sh
+sh train_rscnn_msn_cls.sh
+```
 
 
 #### Part Segmentation
 
-```shell
-sh train_partseg.sh
+##### PointNet++ Single Scale Neighbourhood
+```sh
+sh train_pointnet2_ssn_partseg.sh
 ```
 
-
+##### RS-CNN Multi Scale Neighbourhood
+```sh
+sh train_rscnn_msn_partseg.sh
+```
 
 
 
